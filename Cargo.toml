@@ -2,7 +2,7 @@
 name = "vastdisk-crypto"
 version = "0.1.0"
 edition = "2021"
-description = "VASTDISK crypto core — AES-256-GCM, BLAKE3, Ed25519 verification. Optional WASM bindings."
+description = "VASTDISK crypto core - AES-256-GCM, BLAKE3, Ed25519 verification. Optional WASM bindings."
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/vastdisk/sdk-rust"
 keywords = ["vastdisk", "encryption", "aes-256-gcm", "blake3", "ed25519"]

@@ -44,4 +44,4 @@ Multiple chunks are concatenated.
 
 ## License
 
-AGPLv3 — see [LICENSE](./LICENSE). Crypto code is open for audit.
+AGPLv3 - see [LICENSE](./LICENSE). Crypto code is open for audit.
