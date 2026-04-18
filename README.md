@@ -38,9 +38,14 @@ wasm-pack build --features wasm --target web
 
 ## Wire Format
 
-Each encrypted chunk: `[4-byte BE length][12-byte IV][AES-256-GCM ciphertext]`
+V2 ciphertexts start with a fixed header, then chunk records:
 
-Multiple chunks are concatenated.
+- Header: `[4-byte "VAST"][1-byte version=2][3 reserved bytes][16-byte file nonce]`
+- Each encrypted chunk: `[4-byte BE length][12-byte IV][AES-256-GCM ciphertext+tag]`
+
+Chunks are authenticated with AES-GCM **additional authenticated data (AAD)** that binds the header and chunk index.
+
+Legacy v1 ciphertexts (no header / no AAD binding) are rejected by default.
 
 ## License
 

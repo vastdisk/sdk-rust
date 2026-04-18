@@ -1,8 +1,10 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng, Payload},
+    aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
 use base64::Engine;
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 use crate::constants::*;
 use crate::types::*;
@@ -30,7 +32,11 @@ fn is_v2_ciphertext(ciphertext: &[u8]) -> bool {
 }
 
 pub fn validate_key(key_b64: &str) -> CryptoResult<Vec<u8>> {
-    decode_key_b64_any(key_b64)
+    let key = decode_key_b64_any(key_b64)?;
+    if key.len() != KEY_LENGTH_BYTES {
+        return Err(CryptoError::InvalidKey);
+    }
+    Ok(key)
 }
 
 pub fn validate_ciphertext(ciphertext: &[u8]) -> CryptoResult<()> {
@@ -98,7 +104,8 @@ pub fn encrypt(data: &[u8]) -> CryptoResult<EncryptResult> {
 }
 
 pub fn encrypt_with_opts(data: &[u8], opts: &EncryptOptions) -> CryptoResult<EncryptResult> {
-    let key = Aes256Gcm::generate_key(OsRng);
+    let mut rng = OsRng;
+    let key = Aes256Gcm::generate_key(&mut rng);
     let cipher = Aes256Gcm::new(&key);
     let key_b64 = encode_key_b64url(key.as_slice());
 
@@ -108,14 +115,20 @@ pub fn encrypt_with_opts(data: &[u8], opts: &EncryptOptions) -> CryptoResult<Enc
     header[5] = 0;
     header[6] = 0;
     header[7] = 0;
-    let file_nonce: [u8; V2_FILE_NONCE_LEN] = rand::random();
+    let mut file_nonce = [0u8; V2_FILE_NONCE_LEN];
+    rng.fill_bytes(&mut file_nonce);
     header[8..8 + V2_FILE_NONCE_LEN].copy_from_slice(&file_nonce);
 
     let mut out = Vec::new();
     out.extend_from_slice(&header);
 
     for (chunk_index, chunk) in data.chunks(opts.chunk_size).enumerate() {
-        let nonce_bytes: [u8; IV_LENGTH] = rand::random();
+        if chunk_index > u32::MAX as usize {
+            return Err(CryptoError::EncryptionFailed);
+        }
+
+        let mut nonce_bytes = [0u8; IV_LENGTH];
+        rng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let mut aad = [0u8; V2_HEADER_LEN + 4];
@@ -139,12 +152,12 @@ pub fn encrypt_with_opts(data: &[u8], opts: &EncryptOptions) -> CryptoResult<Enc
 }
 
 pub fn decrypt(ciphertext: &[u8], key_b64: &str) -> CryptoResult<Vec<u8>> {
-    decrypt_with_opts(ciphertext, key_b64, &EncryptOptions::default())
+    decrypt_with_opts(ciphertext, key_b64, &DecryptOptions::default())
 }
 
-pub fn decrypt_with_opts(ciphertext: &[u8], key_b64: &str, _opts: &EncryptOptions) -> CryptoResult<Vec<u8>> {
-    let key_bytes = decode_key_b64_any(key_b64)?;
-    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+pub fn decrypt_with_opts(ciphertext: &[u8], key_b64: &str, opts: &DecryptOptions) -> CryptoResult<Vec<u8>> {
+    let key_bytes = validate_key(key_b64)?;
+    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes[..]);
     let cipher = Aes256Gcm::new(key);
 
     let mut out = Vec::new();
@@ -155,6 +168,9 @@ pub fn decrypt_with_opts(ciphertext: &[u8], key_b64: &str, _opts: &EncryptOption
         h.copy_from_slice(&ciphertext[..V2_HEADER_LEN]);
         header = Some(h);
         offset = V2_HEADER_LEN;
+    } else if !opts.allow_legacy_v1 {
+        // Legacy v1 format had no header/AAD binding; reject by default.
+        return Err(CryptoError::InvalidCiphertext);
     }
     let mut chunk_index: u32 = 0;
 
@@ -166,6 +182,9 @@ pub fn decrypt_with_opts(ciphertext: &[u8], key_b64: &str, _opts: &EncryptOption
         ) as usize;
         offset += LENGTH_PREFIX;
 
+        if chunk_len < IV_LENGTH + 16 {
+            return Err(CryptoError::InvalidCiphertext);
+        }
         if offset + chunk_len > ciphertext.len() {
             return Err(CryptoError::InvalidCiphertext);
         }
@@ -191,14 +210,22 @@ pub fn decrypt_with_opts(ciphertext: &[u8], key_b64: &str, _opts: &EncryptOption
                 .map_err(|_| CryptoError::DecryptionFailed)?
         };
         out.extend_from_slice(&plaintext);
-        chunk_index = chunk_index.wrapping_add(1);
+        chunk_index = chunk_index
+            .checked_add(1)
+            .ok_or(CryptoError::InvalidCiphertext)?;
+    }
+
+    // Reject trailing garbage (Rust previously ignored <4 tail bytes).
+    if offset != ciphertext.len() {
+        return Err(CryptoError::InvalidCiphertext);
     }
 
     Ok(out)
 }
 
 pub fn encrypt_stream<R: std::io::Read>(reader: R, opts: &EncryptOptions) -> CryptoResult<EncryptResult> {
-    let key = Aes256Gcm::generate_key(OsRng);
+    let mut rng = OsRng;
+    let key = Aes256Gcm::generate_key(&mut rng);
     let cipher = Aes256Gcm::new(&key);
     let key_b64 = encode_key_b64url(key.as_slice());
 
@@ -208,7 +235,8 @@ pub fn encrypt_stream<R: std::io::Read>(reader: R, opts: &EncryptOptions) -> Cry
     header[5] = 0;
     header[6] = 0;
     header[7] = 0;
-    let file_nonce: [u8; V2_FILE_NONCE_LEN] = rand::random();
+    let mut file_nonce = [0u8; V2_FILE_NONCE_LEN];
+    rng.fill_bytes(&mut file_nonce);
     header[8..8 + V2_FILE_NONCE_LEN].copy_from_slice(&file_nonce);
 
     let mut out = Vec::new();
@@ -225,7 +253,8 @@ pub fn encrypt_stream<R: std::io::Read>(reader: R, opts: &EncryptOptions) -> Cry
         }
         let chunk = &buffer[..n];
 
-        let nonce_bytes: [u8; IV_LENGTH] = rand::random();
+        let mut nonce_bytes = [0u8; IV_LENGTH];
+        rng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let mut aad = [0u8; V2_HEADER_LEN + 4];
@@ -241,7 +270,9 @@ pub fn encrypt_stream<R: std::io::Read>(reader: R, opts: &EncryptOptions) -> Cry
         out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ciphertext);
 
-        chunk_index = chunk_index.wrapping_add(1);
+        chunk_index = chunk_index
+            .checked_add(1)
+            .ok_or(CryptoError::EncryptionFailed)?;
     }
 
     Ok(EncryptResult {
@@ -255,8 +286,8 @@ pub fn decrypt_stream<R: std::io::Read, W: std::io::Write>(
     mut writer: W,
     key_b64: &str,
 ) -> CryptoResult<()> {
-    let key_bytes = decode_key_b64_any(key_b64)?;
-    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let key_bytes = validate_key(key_b64)?;
+    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes[..]);
     let cipher = Aes256Gcm::new(key);
 
     let mut buffer = vec![0u8; CHUNK_SIZE];
@@ -271,14 +302,13 @@ pub fn decrypt_stream<R: std::io::Read, W: std::io::Write>(
         ciphertext_buffer.extend_from_slice(&buffer[..n]);
     }
 
-    let mut offset = 0;
-    let mut header: Option<[u8; V2_HEADER_LEN]> = None;
-    if is_v2_ciphertext(&ciphertext_buffer) {
-        let mut h = [0u8; V2_HEADER_LEN];
-        h.copy_from_slice(&ciphertext_buffer[..V2_HEADER_LEN]);
-        header = Some(h);
-        offset = V2_HEADER_LEN;
+    if !is_v2_ciphertext(&ciphertext_buffer) {
+        return Err(CryptoError::InvalidCiphertext);
     }
+    let mut h = [0u8; V2_HEADER_LEN];
+    h.copy_from_slice(&ciphertext_buffer[..V2_HEADER_LEN]);
+    let header: Option<[u8; V2_HEADER_LEN]> = Some(h);
+    let mut offset = V2_HEADER_LEN;
     let mut chunk_index: u32 = 0;
 
     while offset + LENGTH_PREFIX <= ciphertext_buffer.len() {
@@ -289,6 +319,9 @@ pub fn decrypt_stream<R: std::io::Read, W: std::io::Write>(
         ) as usize;
         offset += LENGTH_PREFIX;
 
+        if chunk_len < IV_LENGTH + 16 {
+            return Err(CryptoError::InvalidCiphertext);
+        }
         if offset + chunk_len > ciphertext_buffer.len() {
             return Err(CryptoError::InvalidCiphertext);
         }
@@ -314,7 +347,13 @@ pub fn decrypt_stream<R: std::io::Read, W: std::io::Write>(
                 .map_err(|_| CryptoError::DecryptionFailed)?
         };
         writer.write_all(&plaintext).map_err(|e| CryptoError::IoError(e.to_string()))?;
-        chunk_index = chunk_index.wrapping_add(1);
+        chunk_index = chunk_index
+            .checked_add(1)
+            .ok_or(CryptoError::InvalidCiphertext)?;
+    }
+
+    if offset != ciphertext_buffer.len() {
+        return Err(CryptoError::InvalidCiphertext);
     }
 
     Ok(())

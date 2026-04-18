@@ -54,6 +54,20 @@ impl Default for EncryptOptions {
     }
 }
 
+pub struct DecryptOptions {
+    /// Legacy v1 ciphertexts did not include the V2 header / AAD binding.
+    /// Keep this `false` by default to prevent accepting weakly-bound ciphertexts.
+    pub allow_legacy_v1: bool,
+}
+
+impl Default for DecryptOptions {
+    fn default() -> Self {
+        Self {
+            allow_legacy_v1: false,
+        }
+    }
+}
+
 pub enum HashAlgorithm {
     Blake3,
     Sha256,
