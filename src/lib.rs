@@ -15,6 +15,7 @@ pub use types::*;
 pub use encryption::*;
 pub use hash::*;
 pub use verification::*;
+pub use encryption::{validate_key, validate_ciphertext, CiphertextMetadata, get_ciphertext_metadata, reencrypt};
 
 #[cfg(feature = "wasm")]
 pub use wasm::*;
