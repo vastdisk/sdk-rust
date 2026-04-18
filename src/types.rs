@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Deletion payload signed by the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeletionPayload {
     pub file_id: String,
@@ -9,8 +8,58 @@ pub struct DeletionPayload {
     pub deletion_reason: String,
 }
 
-/// Result of encrypting data.
+#[derive(Debug)]
+pub enum CryptoError {
+    InvalidKey,
+    InvalidCiphertext,
+    EncryptionFailed,
+    DecryptionFailed,
+    InvalidSignature,
+    IoError(String),
+}
+
+impl std::fmt::Display for CryptoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CryptoError::InvalidKey => write!(f, "Invalid key"),
+            CryptoError::InvalidCiphertext => write!(f, "Invalid ciphertext"),
+            CryptoError::EncryptionFailed => write!(f, "Encryption failed"),
+            CryptoError::DecryptionFailed => write!(f, "Decryption failed"),
+            CryptoError::InvalidSignature => write!(f, "Invalid signature"),
+            CryptoError::IoError(msg) => write!(f, "IO error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for CryptoError {}
+
+pub type CryptoResult<T> = Result<T, CryptoError>;
+
 pub struct EncryptResult {
     pub ciphertext: Vec<u8>,
     pub key_b64: String,
+}
+
+pub struct EncryptOptions {
+    pub chunk_size: usize,
+    pub compress: bool,
+}
+
+impl Default for EncryptOptions {
+    fn default() -> Self {
+        Self {
+            chunk_size: 1024 * 1024,
+            compress: false,
+        }
+    }
+}
+
+pub enum HashAlgorithm {
+    Blake3,
+    Sha256,
+}
+
+pub enum EncryptionAlgorithm {
+    Aes256Gcm,
+    XChaCha20Poly1305,
 }

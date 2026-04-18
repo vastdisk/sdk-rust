@@ -1,42 +1,40 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
-use crate::types::DeletionPayload;
+use crate::types::*;
 
-/// Verify an Ed25519 deletion proof signature.
-///
-/// Returns `true` if the signature is valid for the given payload, signature
-/// (base64), and public key (base64).
 pub fn verify_deletion_proof(
     payload: &DeletionPayload,
     signature_b64: &str,
     public_key_b64: &str,
-) -> bool {
-    let payload_json = match serde_json::to_string(payload) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
+) -> CryptoResult<()> {
+    let payload_json = serde_json::to_string(payload).map_err(|_| CryptoError::InvalidSignature)?;
 
-    let sig_bytes = match B64.decode(signature_b64) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
+    let sig_bytes = B64.decode(signature_b64).map_err(|_| CryptoError::InvalidSignature)?;
+    let sig = Signature::from_slice(&sig_bytes).map_err(|_| CryptoError::InvalidSignature)?;
 
-    let sig = match Signature::from_slice(&sig_bytes) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
+    let pk_bytes = B64.decode(public_key_b64).map_err(|_| CryptoError::InvalidSignature)?;
+    let pk_array: [u8; 32] = pk_bytes.as_slice().try_into().map_err(|_| CryptoError::InvalidSignature)?;
+    let verifying_key = VerifyingKey::from_bytes(&pk_array).map_err(|_| CryptoError::InvalidSignature)?;
 
-    let pk_bytes = match B64.decode(public_key_b64) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
+    verifying_key
+        .verify(payload_json.as_bytes(), &sig)
+        .map_err(|_| CryptoError::InvalidSignature)
+}
 
-    let verifying_key =
-        match VerifyingKey::from_bytes(pk_bytes.as_slice().try_into().unwrap_or(&[0u8; 32])) {
-            Ok(k) => k,
-            Err(_) => return false,
-        };
+pub fn verify_deletion_proof_json(
+    payload_json: &str,
+    signature_b64: &str,
+    public_key_b64: &str,
+) -> CryptoResult<()> {
+    let sig_bytes = B64.decode(signature_b64).map_err(|_| CryptoError::InvalidSignature)?;
+    let sig = Signature::from_slice(&sig_bytes).map_err(|_| CryptoError::InvalidSignature)?;
 
-    verifying_key.verify(payload_json.as_bytes(), &sig).is_ok()
+    let pk_bytes = B64.decode(public_key_b64).map_err(|_| CryptoError::InvalidSignature)?;
+    let pk_array: [u8; 32] = pk_bytes.as_slice().try_into().map_err(|_| CryptoError::InvalidSignature)?;
+    let verifying_key = VerifyingKey::from_bytes(&pk_array).map_err(|_| CryptoError::InvalidSignature)?;
+
+    verifying_key
+        .verify(payload_json.as_bytes(), &sig)
+        .map_err(|_| CryptoError::InvalidSignature)
 }
